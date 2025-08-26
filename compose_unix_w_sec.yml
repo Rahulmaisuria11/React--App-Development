@@ -1,0 +1,123 @@
+services:
+  # postgresql 15 container
+  db:
+    container_name: NSPSQL
+    build:
+      context: ./nspsql
+      dockerfile: Dockerfile
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./nspsql/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+      - db_data:/data/ns_psql
+    restart: always
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-passwd
+      POSTGRES_DB_FILE: /run/secrets/postgres-db
+      POSTGRES_USER_FILE: /run/secrets/postgres-user
+      POSTGRES_INITDB_ARGS_FILE: /run/secrets/postgres-initdb-args
+    secrets:
+      - postgres-passwd
+      - postgres-user
+      - postgres-db
+      - postgres-initdb-args
+      - source: database_initialization
+        target: "/docker-entrypoint-initdb.d/create-db.sh"
+        mode: 0755
+        uid: "0"
+
+  # flask container
+  api:
+    container_name: NSAPI
+    build:
+      context: ./nsapi
+      dockerfile: Dockerfile
+    volumes:
+      - api_data:/data/ns_api
+    ports:
+      - "5001:5001"
+    restart: always
+    environment:
+      NS_TESTING: ${NS_TESTING}
+      NS_SECRET_KEY: /run/secrets/flask-secret
+      TENANT_ID: /run/secrets/flask-tenant
+      AUDIENCE: /run/secrets/flask-audience
+      POSTGRESQL_USERNAME: /run/secrets/flask-db-user
+      POSTGRESQL_PASSWORD: /run/secrets/flask-db-passwd
+      POSTGRESQL_HOST: ${POSTGRESQL_HOST}
+      POSTGRESQL_PORT: ${POSTGRESQL_PORT}
+      POSTGRESQL_DB: /run/secrets/flask-db-db
+      POSTGRESQL_ARGS: /run/secrets/flask-db-args
+      MAIL_SERVER: /run/secrets/flask-mail-server
+      MAIL_USE_TLS: ${MAIL_USE_TLS}
+      MAIL_USE_SSL: ${MAIL_USE_SSL}
+      MAIL_USERNAME: ''
+      MAIL_PASSWORD: ''
+      MAIL_DEFAULT_SENDER: /run/secrets/flask-mail-sender
+    secrets:
+      - flask-secret
+      - flask-tenant
+      - flask-audience
+      - flask-db-user
+      - flask-db-passwd
+      - flask-db-db
+      - flask-db-args
+      - flask-mail-server
+      - flask-mail-sender
+    depends_on:
+      - db
+
+  web:
+    container_name: NSWEB
+    build:
+      context: ./nsweb
+      dockerfile: Dockerfile
+    volumes:
+      - ./nginx/PROD:/etc/nginx
+      - web_data:/data/ns_web
+    tty: true
+    ports:
+      - "80:80"
+      - "443:443"
+    restart:
+      always
+
+secrets:
+   postgres-passwd:
+     file: secrets/postgres-passwd
+   postgres-user:
+     file: secrets/postgres-user
+   postgres-db:
+     file: secrets/postgres-db
+   postgres-initdb-args:
+     file: secrets/postgres-initdb-args
+   database_initialization:
+     file: nspsql/docker-entrypoint-initdb.d/create_db.sh
+   flask-secret:
+     file: secrets/flask-secret
+   flask-tenant:
+     file: secrets/flask-tenant
+   flask-audience:
+     file: secrets/flask-audience
+   flask-db-user:
+     file: secrets/flask-db-user
+   flask-db-passwd:
+     file: secrets/flask-db-passwd
+   flask-db-db:
+     file: secrets/flask-db-db
+   flask-db-args:
+     file: secrets/flask-db-args
+   flask-mail-server:
+     file: secrets/flask-mail-server
+   flask-mail-sender:
+     file: secrets/flask-mail-sender
+
+networks:
+  default:
+    name: ns-docker-network
+    external: true
+
+volumes:
+  db_data:
+  web_data:
+  api_data:

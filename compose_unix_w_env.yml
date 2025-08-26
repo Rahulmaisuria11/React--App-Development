@@ -1,0 +1,180 @@
+services:
+  # postgresql 15 container
+  db:
+    container_name: NSPSQL
+    build:
+      context: ./nspsql
+      dockerfile: Dockerfile
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./nspsql/docker-entrypoint-initdb.d:/docker-entrypoint-initdb.d
+      - ./nspsql/postgresql.conf:/etc/postgresql.conf
+      - ./nspsql/pg_hba.conf:/etc/pg_hba.conf
+      - /opt/nsdata/nspsql:/var/lib/postgresql/data
+      - /opt/backup:/opt/backup
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_INITDB_ARGS: ${POSTGRES_INITDB_ARGS}
+    secrets:
+      - source: database_initialization
+        target: "/docker-entrypoint-initdb.d/create_db.sh"
+        mode: 0755
+        uid: "0"
+
+  # redis container
+  redis:
+    container_name: NSREDIS
+    build:
+      context: ./nsredis
+      dockerfile: Dockerfile
+    volumes:
+      - redis_data:/data/ns_redis
+      - ./nsredis/redis.conf:/etc/redis/redis.conf
+      - /var/log/redis/redis.log:/data/redis.log
+    ports:
+      - "6379:6379"
+    restart: always
+    command: redis-server /etc/redis/redis.conf --save 20 1 --loglevel debug --requirepass $REDIS_PASSWORD
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  # flask container
+  api:
+    container_name: NSAPI
+    build:
+      context: ./nsapi
+      dockerfile: Dockerfile
+    stop_signal: SIGINT
+    volumes:
+      - api_data:/data/ns_api
+      - /var/log/gunicorn/gunicorn_error.log:/gunicorn_error.log
+      - /var/log/gunicorn/gunicorn_access.log:/gunicorn_access.log
+    ports:
+      - "5001:5001"
+    restart: always
+    environment:
+      NS_TESTING: ${NS_TESTING}
+      NS_SECRET_KEY: ${NS_SECRET_KEY}
+      TENANT_ID: ${TENANT_ID}
+      POSTGRESQL_USERNAME: ${POSTGRESQL_USERNAME}
+      POSTGRESQL_PASSWORD: ${POSTGRESQL_PASSWORD}
+      POSTGRESQL_HOST: ${POSTGRESQL_HOST}
+      POSTGRESQL_PORT: ${POSTGRESQL_PORT}
+      POSTGRESQL_DB: ${POSTGRESQL_DB}
+      POSTGRESQL_ARGS: ${POSTGRESQL_ARGS}
+      MAIL_SERVER: ${MAIL_SERVER}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      MAIL_USE_TLS: ${MAIL_USE_TLS}
+      MAIL_USE_SSL: ${MAIL_USE_SSL}
+      MAIL_DEFAULT_SENDER: ${MAIL_DEFAULT_SENDER}
+    depends_on:
+      - db
+      - redis
+
+  # React JS/Vite  and NGINX container
+  web:
+    container_name: NSWEB
+    build:
+      context: ./nsweb
+      dockerfile: Dockerfile
+    volumes:
+      - ./nginx:/etc/nginx
+      - web_data:/data/ns_web
+    tty: true
+    ports:
+      - "80:80"
+      - "443:443"
+    restart:
+      always
+
+  # Restart service to restart NSAPI every day at 8PM
+  restarter:
+    container_name: NSRESTARTER
+    image: docker:cli
+    volumes: [ "/var/run/docker.sock:/var/run/docker.sock" ]
+    entrypoint: ["/bin/sh","-c"]
+    command:
+      - |
+        while true; do
+          if [ "$$(date +'%H:%M')" = '20:00' ]; then
+            docker restart NSAPI
+          fi
+          sleep 60
+        done
+    restart:
+      always
+
+  # Backup flask_app Database every day at 8PM
+  backup:
+    container_name: NSBACKUP
+    build:
+      context: ./nsbackup
+      dockerfile: Dockerfile
+    volumes:
+      - /opt/backup:/backup
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: ["/bin/sh","-c","./backup.sh"]
+    restart:
+      always
+
+  # Celery worker
+  celery-worker:
+    container_name: NSCELERYWORKER
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    command: >
+      celery --app make_celery worker --loglevel=info
+    depends_on:
+      - redis
+    restart: always
+
+  celery-beat:
+    container_name: NSCELERYBEAT
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    command: >
+      celery --app make_celery beat --loglevel=info
+    depends_on:
+      - redis
+    restart: always
+
+  celery-flower:
+    # TODO
+    # https://flower.readthedocs.io/en/latest/reverse-proxy.html#reverse-proxy
+    container_name: NSCELERYFLOWER
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    ports:
+      - "5555:5555"
+    command: >
+      celery --broker redis://redis_api:6379/0 flower --port 5555
+    depends_on:
+      - redis
+    restart: always
+
+secrets:
+   database_initialization:
+     file: nspsql/docker-entrypoint-initdb.d/create_db.sh
+
+networks:
+  default:
+    name: ns-docker-network
+    external: true
+
+volumes:
+  db_data:
+  web_data:
+  api_data:
+  redis_data:

@@ -1,0 +1,42 @@
+#############
+# Network : #
+#############
+
+docker network create ns-docker-network
+docker network connect ns-docker-network NSPSQL
+docker network connect ns-docker-network NSAPI
+
+#############
+# Database: #
+#############
+
+docker build -f Dockerfile.db -t ns-postgresql .
+./run-docker-psql.sh
+
+########
+# API: #
+########
+
+docker build -f Dockerfile.api -t ns-flask--api .
+docker run -d -p 5001:5001 --name="NSAPI" --restart always --network ns-docker-network ns-flask--api
+
+#########################
+# React/Vite and Nginx: #
+#########################
+
+---> Create Self Signed Certificates:
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout nginx-selfsigned.key -out nginx-selfsigned.crt
+
+
+docker build -f Dockerfile.frontend -t ns-web .
+docker run -d --name "NSWEB" --restart always --network ns-docker-network -p 8080:8080 -p 443:443 -v ./nginx:/etc/nginx ns-web
+
+###################
+# OTHER COMMANDS: #
+###################
+
+docker ps --no-trunc
+docker ps | grep NS
+docker exec -d NSWEB cat /var/log/nginx/access.log
+docker exec -it NSAPI /bin/bash
+docker logs -t NSPSQL
